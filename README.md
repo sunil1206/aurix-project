@@ -366,3 +366,16 @@ aurix/
 ## 10. License
 
 MIT — built as a technical evaluation for the Aurix role.
+<img width="1201" height="831" alt="image" src="https://github.com/user-attachments/assets/66725fcf-f499-4a32-a17f-877487977461" />
+<img width="1883" height="810" alt="image" src="https://github.com/user-attachments/assets/ef73e1d3-5a24-492e-b473-4e8c0a2201ee" />
+<img width="1889" height="890" alt="image" src="https://github.com/user-attachments/assets/bca0e899-b1f3-4e4b-819a-1e323a798d16" />
+<img width="1901" height="893" alt="image" src="https://github.com/user-attachments/assets/3eddeccb-c7f7-435c-a325-51e3b5e4e2ae" />
+<img width="1885" height="880" alt="image" src="https://github.com/user-attachments/assets/3b4ee9b4-2a3b-4f3e-b33f-88bc015cef18" />
+
+
+
+
+
+
+
+
