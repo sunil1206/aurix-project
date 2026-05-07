@@ -1,0 +1,33 @@
+# Preserve LF line endings for files that Linux containers execute or parse,
+# regardless of the host OS's autocrlf setting. Without this, Windows clones
+# can break `docker compose up` with "exec /app/entrypoint.sh: no such file".
+
+* text=auto eol=lf
+
+# Shell scripts MUST be LF.
+*.sh        text eol=lf
+entrypoint.sh text eol=lf
+
+# Dockerfiles and compose files MUST be LF.
+Dockerfile  text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+
+# Python source (LF is the convention).
+*.py        text eol=lf
+
+# Makefiles need LF + tabs (don't normalise tabs).
+Makefile    text eol=lf
+*.mk        text eol=lf
+
+# Allow Windows line endings only where they belong.
+*.ps1       text eol=crlf
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+
+# Mark binaries explicitly so git doesn't try to "fix" them.
+*.png       binary
+*.jpg       binary
+*.gif       binary
+*.ico       binary
+*.pdf       binary

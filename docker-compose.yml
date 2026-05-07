@@ -1,0 +1,74 @@
+# ============================================================
+# Aurix - Local development stack
+#
+# Brings up Postgres + Redis + the Django web service running
+# `runserver` with hot reload (the source tree is bind-mounted).
+#
+#   docker compose up --build       # foreground
+#   docker compose up -d             # background
+#   docker compose logs -f web       # tail web logs
+#   docker compose exec web bash     # shell into the container
+#
+# For a production-shaped stack (gunicorn, no source mount) use:
+#
+#   docker compose -f docker-compose.prod.yml up --build
+# ============================================================
+
+services:
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: aurix
+      POSTGRES_USER: aurix
+      POSTGRES_PASSWORD: aurix
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aurix -d aurix"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  web:
+    build: .
+    image: aurix-web:dev
+    env_file: .env
+    environment:
+      # Dev settings module (SQLite would also work, but Postgres mirrors prod)
+      DJANGO_SETTINGS_MODULE: aurix.settings.development
+      DATABASE_URL: postgres://aurix:aurix@db:5432/aurix
+      REDIS_URL: redis://redis:6379/0
+      DEBUG: "True"
+      ALLOWED_HOSTS: "*"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      # Hot reload: mount the source tree over the image's /app.
+      - .:/app
+    # Override the prod CMD (gunicorn) with runserver for autoreload.
+    command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+
+volumes:
+  postgres_data:
+  redis_data:

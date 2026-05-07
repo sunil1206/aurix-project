@@ -1,0 +1,58 @@
+# ============================================================
+# Aurix - Build context exclusions
+# Keeps the Docker image small and prevents leaking secrets.
+# ============================================================
+
+# Python
+__pycache__
+*.py[cod]
+*.egg-info
+.Python
+
+# Virtualenvs
+venv
+.venv
+env
+ENV
+
+# Local secrets / databases
+.env
+.env.*
+!.env.example
+db.sqlite3
+db.sqlite3-journal
+*.log
+
+# Test / coverage artefacts
+.pytest_cache
+.coverage
+htmlcov
+coverage.xml
+
+# IDE / OS noise
+.vscode
+.idea
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Git
+.git
+.gitignore
+.github
+
+# Docs and frontend artefacts (not needed at runtime)
+docs
+frontend/node_modules
+frontend/dist
+frontend/build
+
+# Already-built static assets — collectstatic runs in the image
+staticfiles
+media
+
+# Docker meta
+docker-compose*.yml
+Dockerfile
+.dockerignore

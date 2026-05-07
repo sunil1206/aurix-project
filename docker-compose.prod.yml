@@ -1,0 +1,64 @@
+# ============================================================
+# Aurix - Production-shaped stack
+#
+# Same services as docker-compose.yml, but:
+#   - web runs the image's default CMD (gunicorn, 4 workers)
+#   - source is NOT bind-mounted; whatever was COPY'd into the
+#     image is what runs
+#   - production settings are used
+#
+# Useful before deploying to verify the container actually
+# survives a clean build.
+#
+#   docker compose -f docker-compose.prod.yml up --build
+# ============================================================
+
+services:
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: aurix
+      POSTGRES_USER: aurix
+      POSTGRES_PASSWORD: aurix
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aurix -d aurix"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  web:
+    build: .
+    image: aurix-web:prod
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: aurix.settings.production
+      DATABASE_URL: postgres://aurix:aurix@db:5432/aurix
+      REDIS_URL: redis://redis:6379/0
+      DEBUG: "False"
+      ALLOWED_HOSTS: localhost,127.0.0.1
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
