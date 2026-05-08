@@ -48,16 +48,22 @@ Aurix - PowerShell task runner
 Usage: .\make.ps1 <target>
 
 Lifecycle:
-  up                Start the dev stack (db + redis + web with hot reload)
+  up                Start the FULL dev stack (db + redis + web + frontend)
   down              Stop the dev stack (volumes preserved)
   restart           Restart just the web container
   build             Build images without starting
   rebuild           Force a clean rebuild from scratch
   ps                List running containers
-  logs              Tail web logs
+  logs              Tail web (Django) logs
 
 First run:
   first-run         Bootstrap: build, migrate, prompt for superuser
+
+Frontend:
+  front             Tail frontend (Vite) logs
+  front-logs        Same as `front`
+  front-shell       sh inside the frontend container
+  front-install     Reinstall node_modules in the container
 
 Django management:
   migrate           Apply migrations
@@ -89,7 +95,8 @@ switch -Regex ($Target) {
     # --- Lifecycle ----------------------------------------------------------
     '^up$' {
         Invoke-Cmd ($DC + @('up', '-d', '--build'))
-        Write-Host "→ http://localhost:8000/api/health/" -ForegroundColor Green
+        Write-Host "→ Frontend: http://localhost:5173" -ForegroundColor Green
+        Write-Host "→ API:      http://localhost:8000/api/health/" -ForegroundColor Green
     }
     '^down$'    { Invoke-Cmd ($DC + @('down')) }
     '^restart$' { Invoke-Cmd ($DC + @('restart', 'web')) }
@@ -125,6 +132,11 @@ switch -Regex ($Target) {
     '^shell$'          { Invoke-Cmd ($EXEC + @('python', 'manage.py', 'shell')) }
     '^dbshell$'        { Invoke-Cmd ($DC + @('exec', 'db', 'psql', '-U', 'aurix', '-d', 'aurix')) }
     '^superuser$'      { Invoke-Cmd ($EXEC + @('python', 'manage.py', 'createsuperuser')) }
+
+    # --- Frontend -----------------------------------------------------------
+    '^(front|front-logs)$' { Invoke-Cmd ($DC + @('logs', '-f', 'frontend')) }
+    '^front-shell$'        { Invoke-Cmd ($DC + @('exec', 'frontend', 'sh')) }
+    '^front-install$'      { Invoke-Cmd ($DC + @('exec', 'frontend', 'npm', 'install')) }
 
     # --- Tests --------------------------------------------------------------
     '^test$'     { Invoke-Cmd ($EXEC + @('pytest', '-ra')) }

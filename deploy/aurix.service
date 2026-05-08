@@ -1,0 +1,36 @@
+[Unit]
+Description=Aurix application stack
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+WorkingDirectory=/opt/aurix
+EnvironmentFile=/opt/aurix/.env
+
+# Bring up the prod compose stack overlaid with the deploy file (Caddy).
+ExecStart=/usr/bin/docker compose \
+    -f docker-compose.prod.yml \
+    -f deploy/docker-compose.deploy.yml \
+    up -d --build --remove-orphans
+
+ExecStop=/usr/bin/docker compose \
+    -f docker-compose.prod.yml \
+    -f deploy/docker-compose.deploy.yml \
+    down
+
+# Pull latest code + restart on `systemctl reload aurix`
+ExecReload=/bin/bash -lc 'cd /opt/aurix && git pull && \
+    /usr/bin/docker compose \
+      -f docker-compose.prod.yml \
+      -f deploy/docker-compose.deploy.yml \
+      up -d --build'
+
+TimeoutStartSec=600
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

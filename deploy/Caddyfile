@@ -1,0 +1,30 @@
+# =================================================================
+# Aurix - Caddy reverse proxy
+#
+# Caddy auto-provisions and auto-renews a Let's Encrypt TLS cert
+# for the configured domain. No manual certbot, no cron jobs.
+#
+# Edit AURIX_DOMAIN in .env if you ever change the domain.
+# =================================================================
+
+{$AURIX_DOMAIN} {
+    encode gzip zstd
+
+    # Strict transport security — opt browsers into HTTPS for a year.
+    header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    header X-Content-Type-Options "nosniff"
+    header X-Frame-Options "DENY"
+    header Referrer-Policy "strict-origin-when-cross-origin"
+
+    # Everything else goes to the SPA's nginx, which already
+    # reverse-proxies /api/* to the Django backend.
+    reverse_proxy frontend:80 {
+        header_up Host {host}
+        header_up X-Real-IP {remote}
+        header_up X-Forwarded-For {remote}
+        header_up X-Forwarded-Proto {scheme}
+    }
+}
+
+# Bare HTTP redirects automatically — Caddy handles this for free
+# when the matcher above includes a domain name.

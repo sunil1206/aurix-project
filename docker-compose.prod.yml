@@ -55,8 +55,21 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    expose:
+      - "8000"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    image: aurix-frontend:prod
+    depends_on:
+      - web
     ports:
-      - "8000:8000"
+      # nginx serves the SPA AND proxies /api/* to the web service.
+      # In a real deploy you'd front this with a TLS terminator.
+      - "80:80"
     restart: unless-stopped
 
 volumes:

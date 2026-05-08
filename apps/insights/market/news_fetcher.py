@@ -1,80 +1,102 @@
 """
 Aurix - Real macro headline fetcher.
 
-Pulls live gold-related news from Google News RSS — free, no API key,
-no rate limits we've ever hit. Cached in Redis for 10 minutes so we
-don't re-fetch on every request.
+Tries multiple free, no-API-key sources in order, then falls through to
+a bundled real-flavour fixture so the News tab is NEVER empty:
 
-Why Google News RSS?
-    - Aggregates Reuters, Bloomberg, FT, WSJ, MarketWatch, etc.
-    - Public RSS endpoint, no token rotation needed.
-    - Returns 20+ headlines per query; we keep the top N.
+    1. Google News RSS    (aggregates Reuters / Bloomberg / FT / WSJ)
+    2. Yahoo Finance RSS  (commodity-tagged feed)
+    3. Investing.com RSS  (commodities news)
+    4. Bundled fixture    (apps/insights/market/fixtures/news_seed.py)
+
+Successful fetches are cached in Redis for 10 minutes.
 """
 from __future__ import annotations
 
 import logging
 from typing import List
-from urllib.parse import quote_plus
 from xml.etree import ElementTree as ET
 
 import httpx
 from django.core.cache import cache
 
+from .fixtures.news_seed import GOLD_HEADLINES_FIXTURE
+
 logger = logging.getLogger("aurix.market.news")
 
 CACHE_KEY = "aurix:market:news:gold"
-CACHE_TTL_SECONDS = 600  # 10 minutes
-
-GOOGLE_NEWS_RSS = "https://news.google.com/rss/search"
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; Aurix/1.0)"}
-
-DEFAULT_QUERY = '("gold price" OR "XAU" OR "bullion") when:7d'
+CACHE_TTL_SECONDS = 600
 MAX_HEADLINES = 6
 
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/rss+xml, application/xml, text/xml, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+}
 
-def fetch_gold_headlines(query: str | None = None, limit: int = MAX_HEADLINES) -> List[dict]:
-    """
-    Returns up to `limit` recent headlines as
-        [{"title": ..., "source": ..., "url": ...}, ...]
-    On any failure returns []; the sentiment layer falls back to mocks.
-    """
-    cache_key = f"{CACHE_KEY}:{query or 'default'}:{limit}"
+GOOGLE_NEWS_RSS = (
+    "https://news.google.com/rss/search"
+    "?q=%22gold+price%22+OR+XAU+OR+bullion+when:7d"
+    "&hl=en-US&gl=US&ceid=US:en"
+)
+YAHOO_NEWS_RSS = "https://feeds.finance.yahoo.com/rss/2.0/headline?s=GC=F&region=US&lang=en-US"
+INVESTING_RSS  = "https://www.investing.com/rss/news_301.rss"
+
+
+def fetch_gold_headlines(limit: int = MAX_HEADLINES) -> List[dict]:
+    """Returns a list of {title, source, url}. NEVER empty."""
+    cache_key = f"{CACHE_KEY}:{limit}"
     cached = cache.get(cache_key)
-    if cached is not None:
+    if cached:
         return cached
 
-    headlines = _fetch(query or DEFAULT_QUERY, limit)
-    if headlines:
-        cache.set(cache_key, headlines, timeout=CACHE_TTL_SECONDS)
-    return headlines
+    for fetcher in (_fetch_google, _fetch_yahoo, _fetch_investing):
+        try:
+            items = fetcher(limit)
+        except Exception as exc:
+            logger.warning("%s failed: %s", fetcher.__name__, exc)
+            items = []
+        if items:
+            logger.info("News from %s: %d headlines", fetcher.__name__, len(items))
+            cache.set(cache_key, items, timeout=CACHE_TTL_SECONDS)
+            return items
+
+    logger.warning("All live news sources failed; using bundled fixture.")
+    out = list(GOLD_HEADLINES_FIXTURE)[:limit]
+    cache.set(cache_key, out, timeout=CACHE_TTL_SECONDS)
+    return out
 
 
-def _fetch(query: str, limit: int) -> List[dict]:
-    params = {
-        "q": query,
-        "hl": "en-US",
-        "gl": "US",
-        "ceid": "US:en",
-    }
-    try:
-        with httpx.Client(timeout=8.0, headers=HEADERS, follow_redirects=True) as client:
-            resp = client.get(GOOGLE_NEWS_RSS, params=params)
-            resp.raise_for_status()
-            xml_text = resp.text
-    except httpx.HTTPError as exc:
-        logger.warning("Google News RSS unreachable: %s", exc)
-        return []
-
-    return _parse_rss(xml_text, limit)
+def _fetch_google(limit):
+    return _fetch_rss(GOOGLE_NEWS_RSS, limit, "Google News")
 
 
-def _parse_rss(xml_text: str, limit: int) -> List[dict]:
-    """RSS 2.0: rss/channel/item with title, link, source."""
+def _fetch_yahoo(limit):
+    return _fetch_rss(YAHOO_NEWS_RSS, limit, "Yahoo Finance")
+
+
+def _fetch_investing(limit):
+    return _fetch_rss(INVESTING_RSS, limit, "Investing.com")
+
+
+def _fetch_rss(url: str, limit: int, default_source: str) -> List[dict]:
+    with httpx.Client(timeout=8.0, headers=HEADERS, follow_redirects=True) as client:
+        resp = client.get(url)
+        resp.raise_for_status()
+        xml_text = resp.text
+    return _parse_rss(xml_text, limit, default_source)
+
+
+def _parse_rss(xml_text: str, limit: int, default_source: str) -> List[dict]:
     out: List[dict] = []
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError as exc:
-        logger.warning("Google News RSS unparseable: %s", exc)
+        logger.warning("RSS unparseable: %s", exc)
         return out
 
     for item in root.iter("item"):
@@ -82,19 +104,21 @@ def _parse_rss(xml_text: str, limit: int) -> List[dict]:
         link_el  = item.find("link")
         src_el   = item.find("source")
 
-        title = (title_el.text or "").strip() if title_el is not None else ""
-        link  = (link_el.text or "").strip()  if link_el  is not None else ""
-        # Google News titles often look like: "Gold steadies as ... - Reuters".
-        # If we don't have a <source> element, peel the suffix off the title.
-        source = (src_el.text or "").strip() if src_el is not None else ""
+        title  = (title_el.text or "").strip() if title_el is not None else ""
+        link   = (link_el.text  or "").strip() if link_el  is not None else ""
+        source = (src_el.text   or "").strip() if src_el   is not None else ""
+
         if not source and " - " in title:
             title, source = title.rsplit(" - ", 1)
-            title = title.strip()
+            title  = title.strip()
             source = source.strip()
 
         if title:
-            out.append({"title": title, "source": source or "Google News", "url": link or "#"})
+            out.append({
+                "title":  title,
+                "source": source or default_source,
+                "url":    link or "#",
+            })
         if len(out) >= limit:
             break
-
     return out

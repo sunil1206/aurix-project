@@ -94,6 +94,12 @@ def _fetch_with_fallbacks(period: str, interval: str):
     if closes:
         return closes, "yfinance", ticker
 
+    # 6. Bundled synthetic fixture — final, guaranteed fallback
+    closes = _load_bundled_csv(period)
+    if closes:
+        logger.warning("Using bundled fixture (live sources unavailable): %d closes", len(closes))
+        return closes, "fixture", "xaueur_3y.csv"
+
     logger.error("All price routes failed for %s/%s", period, interval)
     return [], "none", ""
 
@@ -229,3 +235,38 @@ def _hist_closes(yf, ticker: str, period: str, interval: str) -> List[float]:
     except Exception as exc:
         logger.warning("yfinance %s failed: %s", ticker, exc)
         return []
+
+# ---------------------------------------------------------------------------
+# Bundled fixture (final fallback)
+# ---------------------------------------------------------------------------
+
+def _load_bundled_csv(period: str) -> List[float]:
+    """
+    Read the synthetic 3-year XAU/EUR fixture shipped with the repo and
+    slice to the requested period. Returns [] if the file is missing.
+
+    This guarantees the Charts tab always renders SOMETHING — useful when
+    yfinance and stooq are both rate-limiting.
+    """
+    from pathlib import Path
+    csv_path = Path(__file__).parent / "fixtures" / "xaueur_3y.csv"
+    if not csv_path.exists():
+        return []
+    try:
+        text = csv_path.read_text()
+    except Exception as exc:
+        logger.warning("Could not read bundled fixture: %s", exc)
+        return []
+    closes = _parse_stooq_csv(text)
+    days = _period_to_days(period)
+    if days and len(closes) > 0:
+        # Stooq fixture is daily; trading days ≈ days * 252/365.
+        n = max(35, min(len(closes), int(days * 0.7)))
+        closes = closes[-n:]
+    if closes:
+        # Convert from EUR/oz (fixture is per ounce) to per gram.
+        from decimal import Decimal
+        from django.conf import settings
+        oz_to_g = float(Decimal(settings.AURIX["TROY_OUNCE_GRAMS"]))
+        closes = [round(c / oz_to_g, 4) for c in closes]
+    return closes

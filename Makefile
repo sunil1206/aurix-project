@@ -14,6 +14,7 @@ EXEC        := $(DC) exec web
 
 .PHONY: help up down restart logs build rebuild ps \
         first-run migrate makemigrations shell dbshell superuser \
+        front front-logs front-shell front-install \
         test test-cov lint \
         prod-up prod-down prod-logs \
         clean nuke
@@ -23,9 +24,10 @@ help:                ## Show this help.
 	      /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
 # --- Lifecycle --------------------------------------------------------------
-up:                  ## Start the dev stack (db + redis + web with hot reload).
+up:                  ## Start the full dev stack (db + redis + web + frontend).
 	$(DC) up -d --build
-	@echo "→ http://localhost:8000/api/health/"
+	@echo "→ Frontend: http://localhost:5173"
+	@echo "→ API:      http://localhost:8000/api/health/"
 
 down:                ## Stop the dev stack (volumes preserved).
 	$(DC) down
@@ -71,6 +73,19 @@ dbshell:             ## Open a psql session against the dev database.
 
 superuser:           ## Create a superuser interactively.
 	$(EXEC) python manage.py createsuperuser
+
+# --- Frontend ---------------------------------------------------------------
+front:               ## Tail Vite logs (alias for `make front-logs`).
+	$(DC) logs -f frontend
+
+front-logs:          ## Tail Vite (frontend) logs.
+	$(DC) logs -f frontend
+
+front-shell:         ## sh inside the frontend container.
+	$(DC) exec frontend sh
+
+front-install:       ## Reinstall node_modules inside the container.
+	$(DC) exec frontend npm install
 
 # --- Tests ------------------------------------------------------------------
 test:                ## Run the pytest suite inside the container.

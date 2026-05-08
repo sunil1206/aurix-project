@@ -101,7 +101,7 @@ A `CHECK` constraint guarantees `eur_balance >= 0` and `gold_grams >= 0` at the 
 - **Docker + Docker Compose** (recommended path — only thing you need)
 - Or, for a no-Docker setup: Python 3.11+, PostgreSQL 14+ (optional, SQLite works for dev), Redis 6+ (optional, falls back to in-memory)
 
-### Quickstart (Docker)
+### Quickstart (Docker — everything)
 
 ```bash
 git clone <repo>
@@ -111,17 +111,25 @@ cp .env.example .env       # Windows: copy .env.example .env
 make first-run             # build + migrate + create superuser
 ```
 
-That single `make first-run` boots Postgres, Redis, and the Django web service with hot reload, applies migrations, and prompts for an admin user. The API is now live at `http://localhost:8000/api/`. Run `make help` to see the rest.
+That single `make first-run` boots **Postgres, Redis, the Django backend (with hot reload), AND the React frontend (Vite with HMR)** in one go. Migrations run automatically and you get prompted for the superuser. The app is now live at:
+
+- **Frontend (SPA)** → http://localhost:5173
+- **Backend API**     → http://localhost:8000/api/
+- **API health**      → http://localhost:8000/api/health/
+
+Run `make help` to see all available commands.
 
 Day-to-day:
 
 ```bash
-make up         # start the stack (detached)
-make logs       # tail web logs
-make test       # run pytest inside the container
-make shell      # Django shell
-make dbshell    # psql against the dev database
-make down       # stop (volumes preserved)
+make up           # start the stack (detached)
+make logs         # tail Django logs
+make front        # tail Vite (frontend) logs
+make front-shell  # sh into the frontend container
+make test         # run pytest inside the container
+make shell        # Django shell
+make dbshell      # psql against the dev database
+make down         # stop (volumes preserved)
 ```
 
 To verify the production-shaped stack (gunicorn, no source mount, production settings) works before deploying:
@@ -156,12 +164,15 @@ pytest --cov=apps --cov=services
 
 | File | Purpose |
 |---|---|
-| `Dockerfile` | Multi-stage build, non-root runtime, `entrypoint.sh` orchestration |
-| `entrypoint.sh` | Waits for Postgres → migrates → collectstatic → execs the CMD |
-| `.dockerignore` | Keeps the build context small and prevents leaking `.env` / `db.sqlite3` |
-| `docker-compose.yml` | Dev stack: Postgres + Redis + web with `runserver` and bind-mounted source |
-| `docker-compose.prod.yml` | Same services but web runs gunicorn from the baked image |
-| `Makefile` | One-command wrappers around all of the above |
+| `Dockerfile` | Backend: multi-stage build, non-root runtime, `entrypoint.sh` orchestration |
+| `entrypoint.sh` | Waits for Postgres → migrates → collectstatic → execs gunicorn / runserver |
+| `.dockerignore` | Keeps the backend build context small (no `.env`, `db.sqlite3`, etc.) |
+| `frontend/Dockerfile` | Frontend dev image: Node 20 + Vite with HMR |
+| `frontend/Dockerfile.prod` | Frontend prod image: multi-stage Vite build → nginx serving static + reverse-proxying `/api` |
+| `frontend/nginx.conf` | nginx config for the prod frontend image |
+| `docker-compose.yml` | Dev stack: Postgres + Redis + Django (runserver) + Vite (HMR) — all bind-mounted |
+| `docker-compose.prod.yml` | Prod stack: Postgres + Redis + Django (gunicorn) + nginx-served frontend |
+| `Makefile` / `make.ps1` | One-command wrappers around all of the above |
 
 ---
 

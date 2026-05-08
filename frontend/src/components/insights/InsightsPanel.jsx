@@ -141,12 +141,7 @@ function OrderTab() {
     <div className="grid lg:grid-cols-2 gap-4 lg:gap-6">
       <AdvancedOrderEntry />
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 text-sm text-slate-400 space-y-3">
-        <h4 className="text-white font-semibold">How orders flow</h4>
-        <ul className="list-disc pl-5 space-y-2 marker:text-amber-500">
-          <li><span className="font-mono text-amber-400">Market</span> — fills immediately at the cached spot via <span className="font-mono">POST /api/transactions/buy/</span> (atomic, row-locked).</li>
-          <li><span className="font-mono text-amber-400">Limit / GTT / Schedule</span> — UI is wired but persistence ships in v0.3 (an <span className="font-mono">orders</span> model + a Celery worker that polls the price service).</li>
-          <li>R:R is computed live; reject orders with R:R &lt; 1 in production.</li>
-        </ul>
+        
       </div>
     </div>
   )

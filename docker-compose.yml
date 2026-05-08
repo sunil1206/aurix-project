@@ -1,15 +1,21 @@
 # ============================================================
 # Aurix - Local development stack
 #
-# Brings up Postgres + Redis + the Django web service running
-# `runserver` with hot reload (the source tree is bind-mounted).
+# Brings up Postgres + Redis + Django (web, runserver) + Vite
+# (frontend, hot reload). Source trees are bind-mounted so edits
+# auto-reload on both sides.
 #
-#   docker compose up --build       # foreground
-#   docker compose up -d             # background
-#   docker compose logs -f web       # tail web logs
-#   docker compose exec web bash     # shell into the container
+#   docker compose up --build           # foreground
+#   docker compose up -d                 # background
+#   docker compose logs -f web           # tail Django logs
+#   docker compose logs -f frontend      # tail Vite logs
+#   docker compose exec web bash         # shell into Django container
 #
-# For a production-shaped stack (gunicorn, no source mount) use:
+# Open the app at:
+#   http://localhost:5173        (React SPA)
+#   http://localhost:8000/api/   (Django API direct)
+#
+# For a production-shaped stack (gunicorn + nginx, no source mount):
 #
 #   docker compose -f docker-compose.prod.yml up --build
 # ============================================================
@@ -68,6 +74,30 @@ services:
       - .:/app
     # Override the prod CMD (gunicorn) with runserver for autoreload.
     command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: aurix-frontend:dev
+    environment:
+      # Vite proxies /api -> the Django service via the docker network.
+      VITE_API_PROXY_TARGET: http://web:8000
+      # Empty BASE_URL => the SPA hits relative URLs that Vite proxies.
+      VITE_API_BASE_URL: ""
+      # Polling-based file watching is more reliable on Windows / WSL2 mounts.
+      CHOKIDAR_USEPOLLING: "true"
+    ports:
+      - "5173:5173"
+    depends_on:
+      - web
+    volumes:
+      # Mount the source tree...
+      - ./frontend:/app
+      # ...but keep the container's node_modules (anonymous volume) so
+      # the host's (possibly empty / OS-mismatched) node_modules doesn't
+      # shadow the one installed in the image.
+      - /app/node_modules
 
 volumes:
   postgres_data:

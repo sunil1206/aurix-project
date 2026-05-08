@@ -16,24 +16,10 @@ import logging
 from dataclasses import dataclass, field
 from typing import List
 
+from .fixtures.news_seed import GOLD_HEADLINES_FIXTURE
 from .news_fetcher import fetch_gold_headlines
 
 logger = logging.getLogger("aurix.market.sentiment")
-
-
-# Used only as a last-resort fallback when Google News RSS is unreachable.
-FALLBACK_HEADLINES: List[dict] = [
-    {"title": "Fed signals potential rate cut in Q3, boosting safe-haven appeal",
-     "source": "Reuters", "url": "#"},
-    {"title": "Central banks increase gold reserves for 5th consecutive month",
-     "source": "Financial Times", "url": "#"},
-    {"title": "Geopolitical tensions in Middle East drive renewed safe-haven demand",
-     "source": "Bloomberg", "url": "#"},
-    {"title": "Strong US jobs report dampens expectations for near-term rate cuts",
-     "source": "WSJ", "url": "#"},
-    {"title": "Central bank gold buying hits record pace, says World Gold Council",
-     "source": "Reuters", "url": "#"},
-]
 
 
 @dataclass(frozen=True)
@@ -54,9 +40,17 @@ class SentimentResult:
 
 
 def get_news_sentiment(query: str = "gold") -> SentimentResult:
-    """Always returns a result; never raises for the caller."""
-    headlines = fetch_gold_headlines() or FALLBACK_HEADLINES
-    using_live = headlines is not FALLBACK_HEADLINES
+    """Always returns a result with at least the bundled headlines."""
+    headlines = fetch_gold_headlines()
+    if not headlines:
+        # Defensive: fetch_gold_headlines should never return empty now,
+        # but we keep this for total network outages.
+        headlines = list(GOLD_HEADLINES_FIXTURE)
+
+    # Detect whether the fetcher returned the bundled fixture by comparing
+    # titles — the fixture titles are stable.
+    fixture_titles = {h["title"] for h in GOLD_HEADLINES_FIXTURE}
+    using_live = not all(h["title"] in fixture_titles for h in headlines)
 
     finbert = _try_finbert(headlines)
     if finbert is not None:

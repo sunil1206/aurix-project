@@ -1,0 +1,41 @@
+# =================================================================
+# Aurix - Production deploy stack (intended for a Digital Ocean droplet)
+#
+# Adds Caddy in front of docker-compose.prod.yml so the site is
+# reachable at https://aurix.linustech.in with auto-SSL.
+#
+# Bring up:
+#   docker compose -f docker-compose.prod.yml -f deploy/docker-compose.deploy.yml up -d --build
+#
+# Caddy will request a Let's Encrypt cert on first start.
+# =================================================================
+
+services:
+
+  # Frontend: keep the nginx-served bundle, but stop publishing port 80
+  # to the host — Caddy handles the public surface now.
+  frontend:
+    ports: !reset []
+    expose:
+      - "80"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      AURIX_DOMAIN: ${AURIX_DOMAIN:-aurix.linustech.in}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"          # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data       # cert storage (must persist!)
+      - caddy_config:/config
+    depends_on:
+      - frontend
+
+volumes:
+  caddy_data:
+  caddy_config:
