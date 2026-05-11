@@ -1,172 +1,235 @@
-# Aurix - Deploy to Digital Ocean
+# Aurix - Deploy to Digital Ocean (full step-by-step)
 
-End-to-end guide to ship Aurix at **https://aurix.linustech.in**. The
-target stack is a single Ubuntu droplet running Docker Compose, with
-Caddy in front of the app for automatic Let's Encrypt SSL. Total
-deployment time after the first run: ~5 minutes per code push.
+End-to-end guide to ship Aurix at **https://aurix.linustech.in** on a single Ubuntu droplet, behind Caddy with auto-SSL, running as a non-root `deploy` user.
 
----
-
-## 1. Prerequisites
-
-- Digital Ocean account with billing enabled
-- Domain registered for `linustech.in` and DNS managed somewhere you can edit (Cloudflare, Route 53, Namecheap, etc.)
-- This repo pushed to GitHub (or any git host the droplet can clone from)
-- An SSH key on your local machine — `ssh-keygen -t ed25519` if you don't have one
-
-Optional: an OpenAI API key if you want the LLM analyst. The app works without it (rule-based fallback).
+Estimated time end-to-end: **30–45 minutes** the first time, **30 seconds** for every subsequent code push.
 
 ---
 
-## 2. Push the code to GitHub
+## Step 0 — What you need before you start
 
-From your laptop, in the project root:
-
-```bash
-git init                                          # if not already a repo
-git add .
-git commit -m "Initial Aurix release"
-
-# Create an empty repo on GitHub (any visibility), then:
-git remote add origin git@github.com:<you>/aurix.git
-git branch -M main
-git push -u origin main
-```
+- A Digital Ocean account
+- The domain `linustech.in` with editable DNS
+- Your code pushed to GitHub at `https://github.com/<you>/aurix-project`
+- An SSH key on your local machine (run `ssh-keygen -t ed25519` if you don't have one — accept defaults)
 
 ---
 
-## 3. Create the droplet
+## Step 1 — Create the droplet
 
-On Digital Ocean:
+On Digital Ocean → **Create → Droplets**:
 
-1. **Create → Droplets**
-2. Region: **Frankfurt 1** (closest to Indian users + EU compliance) or **Bangalore 1**
-3. Image: **Ubuntu 24.04 (LTS) x64**
-4. Size: **Basic / Regular SSD / 2 GB RAM / 1 vCPU** ($12/mo). Aurix runs comfortably on this; bump to 4GB if you enable FinBERT.
-5. Authentication: **SSH key** — paste the public half of the key you generated.
-6. Hostname: `aurix-prod`
-7. Click **Create**.
+| Setting | Value |
+|---|---|
+| Region | Bangalore 1 (or Frankfurt 1 if you want EU) |
+| Image | Ubuntu 24.04 (LTS) x64 |
+| Size | Basic / Regular SSD / **2 GB RAM / 1 vCPU** ($12/mo) |
+| Authentication | **SSH key** — paste the contents of your `~/.ssh/id_ed25519.pub` |
+| Hostname | `aurix-prod` |
 
-After ~30 seconds the droplet has a public IP — note it down (e.g. `134.209.45.123`).
+Click **Create**. After ~30 seconds note the public IP (e.g. `134.209.45.123`).
 
 ---
 
-## 4. Point DNS at the droplet
+## Step 2 — Point DNS at the droplet
 
-In your DNS provider, add an **A record**:
+In your DNS provider (Cloudflare / Route 53 / Namecheap / wherever you manage `linustech.in`), add:
 
 | Type | Name | Value | TTL |
 |---|---|---|---|
 | A | `aurix` | `134.209.45.123` *(your droplet IP)* | 300 |
 
-Verify propagation:
+If using Cloudflare, set the proxy status to **DNS only** (grey cloud) — Caddy needs to issue its own certificate and the orange cloud would interfere.
 
-```bash
-dig +short aurix.linustech.in
-# expected: 134.209.45.123
+Wait for propagation (usually 1–5 min), then verify from your laptop:
+
+```powershell
+nslookup aurix.linustech.in
+# Expected: Address: 134.209.45.123
 ```
-
-If you get the wrong IP or nothing, wait a few minutes and try again. Caddy needs DNS to resolve before it can issue a cert.
 
 ---
 
-## 5. SSH in and install Docker
+## Step 3 — First SSH in as root (one time only)
+
+```powershell
+ssh root@aurix.linustech.in
+```
+
+Accept the host key when prompted. You're now logged into the droplet as root. Update everything once:
 
 ```bash
-ssh root@aurix.linustech.in
-
-# 1. System packages
 apt update && apt upgrade -y
-apt install -y ca-certificates curl gnupg git ufw
+apt install -y ca-certificates curl gnupg git ufw sudo
+```
 
-# 2. Docker (official repo, the apt-shipped version is too old)
-install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-  | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-chmod a+r /etc/apt/keyrings/docker.gpg
+---
+
+## Step 4 — Create the `deploy` user
+
+This is the user the app will run under. **No more root access from this point on.**
+
+```bash
+# Create the user with a home dir + bash shell
+adduser --disabled-password --gecos "" deploy
+
+# Give them passwordless sudo (CI/CD friendly)
+echo "deploy ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/deploy
+chmod 440 /etc/sudoers.d/deploy
+
+# Copy the SSH key from root → deploy so you can log in directly
+mkdir -p /home/deploy/.ssh
+cp /root/.ssh/authorized_keys /home/deploy/.ssh/authorized_keys
+chown -R deploy:deploy /home/deploy/.ssh
+chmod 700 /home/deploy/.ssh
+chmod 600 /home/deploy/.ssh/authorized_keys
+```
+
+Verify from your laptop in **a new terminal** (don't close the root one yet):
+
+```powershell
+ssh deploy@aurix.linustech.in 'whoami && id'
+# Expected:
+#   deploy
+#   uid=1000(deploy) gid=1000(deploy) groups=1000(deploy)
+```
+
+If this works, switch all future SSH to `deploy@`. The root session can be exited.
+
+---
+
+## Step 5 — Lock down SSH (optional but recommended)
+
+Still as root (last thing you'll do as root):
+
+```bash
+# Disable root login + password auth
+sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+systemctl restart ssh
+exit
+```
+
+From now on you log in only as `deploy@aurix.linustech.in` with your SSH key.
+
+---
+
+## Step 6 — Install Docker (as deploy)
+
+```bash
+ssh deploy@aurix.linustech.in
+```
+
+Inside the droplet:
+
+```bash
+# Docker official repo (apt-shipped version is too old)
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
+  sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
 
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-  https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
-  > /etc/apt/sources.list.d/docker.list
+  https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
 
-apt update
-apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
-# 3. Verify
+# Let `deploy` run docker without sudo
+sudo usermod -aG docker deploy
+
+# Re-login so the new group takes effect
+exit
+```
+
+Log back in:
+
+```powershell
+ssh deploy@aurix.linustech.in
+```
+
+Verify:
+
+```bash
 docker --version              # Docker version 27.x
 docker compose version        # Docker Compose version v2.x
+docker run --rm hello-world   # should print "Hello from Docker!"
 ```
 
 ---
 
-## 6. Firewall
-
-Open only what we need: SSH, HTTP, HTTPS.
+## Step 7 — Firewall
 
 ```bash
-ufw default deny incoming
-ufw default allow outgoing
-ufw allow OpenSSH
-ufw allow http
-ufw allow https
-ufw --force enable
-ufw status
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow OpenSSH
+sudo ufw allow http
+sudo ufw allow https
+sudo ufw --force enable
+sudo ufw status verbose
+```
+
+Expected: `22/tcp ALLOW IN`, `80/tcp ALLOW IN`, `443/tcp ALLOW IN`. Everything else denied.
+
+---
+
+## Step 8 — Clone Aurix into `/opt/aurix`
+
+`/opt` is the conventional location for site-specific software. We give the `deploy` user ownership.
+
+```bash
+sudo mkdir -p /opt/aurix
+sudo chown deploy:deploy /opt/aurix
+
+# Public repo? Just clone over HTTPS:
+git clone https://github.com/sunil1206/aurix-project.git /opt/aurix
+
+# Private repo? Generate a deploy key first:
+#   ssh-keygen -t ed25519 -f ~/.ssh/github_deploy -N ''
+#   cat ~/.ssh/github_deploy.pub
+# Add the printed key to your GitHub repo's
+#   Settings → Deploy keys (Read access is fine).
+# Then clone with SSH:
+#   GIT_SSH_COMMAND='ssh -i ~/.ssh/github_deploy' \
+#     git clone git@github.com:sunil1206/aurix-project.git /opt/aurix
+
+cd /opt/aurix
+ls       # should show docker-compose.yml, deploy/, frontend/, apps/, ...
 ```
 
 ---
 
-## 7. Clone Aurix
+## Step 9 — Configure environment
 
 ```bash
-mkdir -p /opt
-cd /opt
-git clone https://github.com/<you>/aurix.git
-cd aurix
-```
-
-If you used SSH for GitHub, you'll need a deploy key:
-
-```bash
-ssh-keygen -t ed25519 -f /root/.ssh/github_deploy -N ''
-cat /root/.ssh/github_deploy.pub
-```
-
-Add the printed key as a **deploy key** in your GitHub repo's Settings → Deploy keys (read-only is fine), then:
-
-```bash
-cat >> /root/.ssh/config <<'EOF'
-Host github.com
-  IdentityFile /root/.ssh/github_deploy
-  IdentitiesOnly yes
-EOF
-git remote set-url origin git@github.com:<you>/aurix.git
-```
-
----
-
-## 8. Configure environment
-
-```bash
+cd /opt/aurix
 cp deploy/.env.deploy.example .env
 nano .env
 ```
 
-At minimum, change:
+Change these values **at minimum**:
 
-| Variable | Value |
+| Variable | How to get a value |
 |---|---|
-| `SECRET_KEY` | run `openssl rand -base64 50` and paste the output |
-| `POSTGRES_PASSWORD` | run `openssl rand -base64 24` |
-| `DATABASE_URL` | update the password to match the line above |
-| `AURIX_DOMAIN` | `aurix.linustech.in` |
-| `ALLOWED_HOSTS` | `aurix.linustech.in` |
-| `OPENAI_API_KEY` | optional — paste your key if you want the LLM analyst |
+| `SECRET_KEY` | run `openssl rand -base64 50` in a separate shell, paste output |
+| `POSTGRES_PASSWORD` | run `openssl rand -base64 24`, paste output |
+| `DATABASE_URL` | replace `CHANGE_THIS_STRONG_PASSWORD` with the password above |
+| `AURIX_DOMAIN` | leave as `aurix.linustech.in` |
+| `ALLOWED_HOSTS` | leave as `aurix.linustech.in` |
+| `CORS_ALLOWED_ORIGINS` | leave as `https://aurix.linustech.in` |
+| `OPENAI_API_KEY` | optional — paste your key for the LLM analyst, or leave blank for the rule-based fallback |
 
-Save (`Ctrl+O`, `Enter`, `Ctrl+X`).
+Save: `Ctrl+O`, `Enter`, `Ctrl+X`.
+
+```bash
+chmod 600 .env       # only deploy can read it
+```
 
 ---
 
-## 9. First-time bring-up
+## Step 10 — First boot
 
 ```bash
 cd /opt/aurix
@@ -176,7 +239,7 @@ docker compose \
   -f deploy/docker-compose.deploy.yml \
   up -d --build
 
-# Watch the build (first time takes ~3-4 minutes)
+# Watch the logs (first time takes 3–6 minutes — pip + npm install)
 docker compose \
   -f docker-compose.prod.yml \
   -f deploy/docker-compose.deploy.yml \
@@ -185,17 +248,24 @@ docker compose \
 
 You should see, in order:
 
-1. `db` becomes healthy
-2. `redis` becomes healthy
-3. `web` runs `migrate` then starts gunicorn
-4. `frontend` builds and nginx starts
-5. `caddy` starts, requests a Let's Encrypt cert, says `certificate obtained successfully`
+```
+db        | database system is ready to accept connections
+redis     | Ready to accept connections tcp
+web       | [entrypoint] Applying database migrations...
+web       | [entrypoint] Starting: gunicorn aurix.wsgi:application ...
+frontend  | nginx/1.27.x ready to handle connections
+caddy     | certificate obtained successfully  <— this is the magic line
+```
 
-Press `Ctrl+C` to detach (the stack keeps running).
+Press `Ctrl+C` to detach (containers keep running).
 
-Smoke test from your laptop:
+---
 
-```bash
+## Step 11 — Smoke test
+
+From your laptop:
+
+```powershell
 curl -I https://aurix.linustech.in
 # Expected: HTTP/2 200, with Strict-Transport-Security header
 
@@ -203,11 +273,11 @@ curl https://aurix.linustech.in/api/health/
 # Expected: {"status":"ok","service":"aurix"}
 ```
 
-Open **https://aurix.linustech.in** in a browser — the Aurix login screen should appear with a valid TLS lock.
+Open **https://aurix.linustech.in** in a browser — the Aurix login page appears with a valid TLS lock. If you see "Your connection is not private", Caddy is still negotiating the certificate; wait 30 seconds and refresh.
 
 ---
 
-## 10. Create the first superuser
+## Step 12 — Create the first superuser
 
 ```bash
 docker compose \
@@ -216,47 +286,57 @@ docker compose \
   exec web python manage.py createsuperuser
 ```
 
----
-
-## 11. Install the systemd unit (auto-start on reboot)
-
-```bash
-cp /opt/aurix/deploy/aurix.service /etc/systemd/system/aurix.service
-systemctl daemon-reload
-systemctl enable aurix
-systemctl start aurix
-systemctl status aurix
-```
-
-The unit also ships an `ExecReload` that does `git pull && docker compose up -d --build`, so deploying a new version is one command:
-
-```bash
-systemctl reload aurix
-```
+Enter your email + password. Use this account to log into the SPA.
 
 ---
 
-## 12. The deploy loop (after the first time)
+## Step 13 — Auto-start on reboot (systemd)
+
+```bash
+sudo cp /opt/aurix/deploy/aurix.service /etc/systemd/system/aurix.service
+
+# The unit references /opt/aurix and runs as root by default.
+# We want it to run as the `deploy` user instead — patch it:
+sudo sed -i '/^\[Service\]/a User=deploy\nGroup=deploy' /etc/systemd/system/aurix.service
+
+# Activate
+sudo systemctl daemon-reload
+sudo systemctl enable aurix
+sudo systemctl start aurix
+sudo systemctl status aurix
+```
+
+The unit ships an `ExecReload` that does `git pull && docker compose up -d --build`, so deploying becomes one command.
+
+---
+
+## Step 14 — The deploy loop
 
 From your laptop:
 
-```bash
+```powershell
+cd D:\startup\aurix
 git add .
 git commit -m "<change>"
 git push origin main
 ```
 
-From the droplet:
+From anywhere with your SSH key:
 
-```bash
-ssh root@aurix.linustech.in 'systemctl reload aurix'
+```powershell
+ssh deploy@aurix.linustech.in 'sudo systemctl reload aurix'
 ```
 
-That single command pulls the latest code, rebuilds the changed images, and restarts containers in place. Caddy keeps running so users see no SSL hiccup.
+This:
+1. Pulls the latest commit from GitHub
+2. Rebuilds whatever images changed (frontend / backend)
+3. Restarts containers in place
 
-### Optional: GitHub Actions auto-deploy
+Caddy keeps serving throughout — users don't see a TLS hiccup.
 
-Add this workflow at `.github/workflows/deploy.yml` to deploy on every push to `main`:
+### Optional — GitHub Actions auto-deploy
+
+Add `.github/workflows/deploy.yml`:
 
 ```yaml
 name: Deploy
@@ -269,87 +349,116 @@ jobs:
     steps:
       - uses: appleboy/ssh-action@v1.0.0
         with:
-          host:     ${{ secrets.DROPLET_HOST }}
-          username: root
-          key:      ${{ secrets.DROPLET_SSH_KEY }}
-          script:   systemctl reload aurix
+          host:     ${{ secrets.DROPLET_HOST }}      # aurix.linustech.in
+          username: deploy
+          key:      ${{ secrets.DROPLET_SSH_KEY }}   # private half of an SSH key
+          script:   sudo systemctl reload aurix
 ```
 
-Add `DROPLET_HOST` (= `aurix.linustech.in`) and `DROPLET_SSH_KEY` (= the private half of an SSH key you also added to the droplet's `~/.ssh/authorized_keys`) under repo Settings → Secrets and variables → Actions.
+In GitHub repo → **Settings → Secrets and variables → Actions**, add:
+- `DROPLET_HOST` = `aurix.linustech.in`
+- `DROPLET_SSH_KEY` = contents of an SSH private key whose public half is in `/home/deploy/.ssh/authorized_keys`
+
+Now every push to `main` auto-deploys.
 
 ---
 
-## 13. Operations cheat sheet
+## Step 15 — Day-2 operations cheat sheet
+
+All commands run as `deploy` from `/opt/aurix`.
 
 ```bash
-# All commands run from /opt/aurix on the droplet.
-
-# Tail logs (replace `web` with caddy / frontend / db / redis)
+# Tail any service's logs
 docker compose -f docker-compose.prod.yml -f deploy/docker-compose.deploy.yml logs -f web
+docker compose ... logs -f frontend
+docker compose ... logs -f caddy
 
 # Django shell
 docker compose ... exec web python manage.py shell
 
-# psql against production database
+# Postgres shell
 docker compose ... exec db psql -U aurix -d aurix
 
-# Backup the database (run from the droplet)
-docker compose ... exec -T db pg_dump -U aurix aurix | gzip > /opt/backups/aurix-$(date +%F).sql.gz
+# Backup the DB (run a cron of this — see step 16)
+docker compose ... exec -T db pg_dump -U aurix aurix | gzip > ~/backups/aurix-$(date +%F).sql.gz
 
-# Restart just one service
+# Restart just the web container
 docker compose ... restart web
 
-# Stop everything
-systemctl stop aurix
+# Stop everything (systemd-managed)
+sudo systemctl stop aurix
 
-# Force a clean rebuild (e.g. after requirements.txt change)
-docker compose -f docker-compose.prod.yml -f deploy/docker-compose.deploy.yml build --no-cache web
-systemctl reload aurix
+# Clean rebuild after requirements.txt changes
+docker compose -f docker-compose.prod.yml -f deploy/docker-compose.deploy.yml build --no-cache
+sudo systemctl reload aurix
 ```
 
 ---
 
-## 14. Files you just shipped
+## Step 16 — Nightly backups
 
-| Path | Role |
-|---|---|
-| `Dockerfile` | Backend image (Django + gunicorn) |
-| `frontend/Dockerfile.prod` | Frontend image (Vite build → nginx) |
-| `frontend/nginx.conf` | nginx serving SPA + reverse-proxying `/api/*` to web |
-| `docker-compose.prod.yml` | Production-shaped local stack (no TLS) |
-| `deploy/docker-compose.deploy.yml` | Adds Caddy in front (TLS termination + HTTP/3) |
-| `deploy/Caddyfile` | Caddy config — auto-SSL via Let's Encrypt |
-| `deploy/aurix.service` | systemd unit for auto-start + `systemctl reload aurix` deploy hook |
-| `deploy/.env.deploy.example` | Env template for production |
+```bash
+mkdir -p ~/backups
+
+# Add to crontab — runs every night at 2am
+( crontab -l 2>/dev/null; echo "0 2 * * * cd /opt/aurix && \
+  docker compose -f docker-compose.prod.yml -f deploy/docker-compose.deploy.yml \
+  exec -T db pg_dump -U aurix aurix | gzip > /home/deploy/backups/aurix-\$(date +\\%F).sql.gz && \
+  find /home/deploy/backups -name 'aurix-*.sql.gz' -mtime +14 -delete" ) | crontab -
+
+# Verify
+crontab -l
+```
+
+Backups older than 14 days are auto-pruned. To restore:
+
+```bash
+gunzip < ~/backups/aurix-2026-05-07.sql.gz | \
+  docker compose ... exec -T db psql -U aurix -d aurix
+```
 
 ---
 
-## 15. Common deploy issues
+## Step 17 — Common deploy issues
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `ERR_CONNECTION_REFUSED` in browser | Caddy not running, or DNS not propagated | `docker compose logs caddy`; `dig aurix.linustech.in` |
-| Caddy: `obtain: error getting certificate` | Port 80 not reachable from internet | `ufw status` — must show 80/tcp ALLOW |
-| 502 Bad Gateway | `web` or `frontend` crashed | `docker compose logs frontend`; `docker compose logs web` |
+| `ssh deploy@... Permission denied` | SSH key not in `/home/deploy/.ssh/authorized_keys` | Re-run the `cp /root/.ssh/...` lines in Step 4 |
+| `docker: permission denied while trying to connect` | `deploy` not in the `docker` group yet | `sudo usermod -aG docker deploy` then exit and re-SSH |
+| Caddy: `obtain: getting certificate: ... timeout` | Port 80 not reachable from internet | `sudo ufw status` — must show 80/tcp; verify droplet's public firewall in DO panel too |
+| Browser shows "ERR_CONNECTION_REFUSED" | Caddy crashed or DNS hasn't propagated | `docker compose ... logs caddy`; `dig aurix.linustech.in` from your laptop |
+| 502 Bad Gateway | `web` or `frontend` container died | `docker compose ... ps` then logs of whichever is `Restarting` |
 | `relation "users_user" does not exist` | Migrations didn't run | `docker compose ... exec web python manage.py migrate` |
-| Charts empty | yfinance + stooq blocked from droplet | The bundled `xaueur_3y.csv` fixture kicks in automatically; check `docker compose logs web | grep aurix.market` |
-| News empty | All RSS feeds blocked | The bundled `news_seed.py` fixture kicks in; same story |
+| Charts empty | yfinance + stooq blocked from droplet | Bundled `xaueur_3y.csv` kicks in automatically; check `docker compose ... logs web | grep aurix.market` to confirm |
+| News empty | All RSS feeds blocked | Bundled `news_seed.py` kicks in; check `docker compose ... logs web | grep aurix.market.news` |
+| `git pull rejected` | Local commits on the droplet diverged from main | `cd /opt/aurix && git reset --hard origin/main` (DESTRUCTIVE — only safe because you don't edit on the droplet) |
 
 ---
 
-## 16. Hardening for real production
+## Step 18 — Hardening for real production
 
-This guide gets you to "live with TLS in 30 minutes". For a real fintech you'd also want:
+This guide gets you to "live with TLS, auto-deploy, backups, non-root user, locked-down SSH" in under 45 minutes. For a real fintech product you'd then add:
 
-- **Off-host database**: DO Managed Postgres ($15/mo) — survives droplet rebuilds, automated backups, point-in-time recovery
-- **Separate Redis**: DO Managed Redis or just keep on-droplet for caching only
-- **Object storage** for static media: DO Spaces (S3-compatible)
-- **Separate frontend hosting**: deploy `frontend/dist/` to Cloudflare Pages or DO App Platform
-- **Health monitoring**: UptimeRobot pinging `/api/health/` every minute
-- **Log aggregation**: ship container logs to Better Stack / Logtail
-- **Error tracking**: set `SENTRY_DSN` in `.env` and `sentry-sdk` is already wired in
-- **Backups**: cron the `pg_dump` line above + push to DO Spaces nightly
-- **Rate limiting at the edge**: Cloudflare in front of Caddy
-- **Secret management**: DO App Platform env injection or HashiCorp Vault, not a flat `.env`
+- **DO Managed Postgres** ($15/mo) — survives droplet rebuilds, point-in-time recovery, automatic backups
+- **DO Managed Redis** — same idea
+- **DO Spaces** — S3-compatible object storage for uploads + nightly DB dumps
+- **Cloudflare** in front of Caddy — DDoS protection + WAF + global edge cache
+- **UptimeRobot** pinging `/api/health/` every minute
+- **Sentry** for error tracking (set `SENTRY_DSN` in `.env`; it's already wired in `aurix/settings/production.py`)
+- **Better Stack / Logtail** for log aggregation
+- **HashiCorp Vault** or DO App Platform secrets — replace the flat `.env`
 
-For an evaluation build, the single-droplet setup above is more than sufficient and runs at ~$12/mo.
+---
+
+## Quick reference card
+
+```
+Domain        : aurix.linustech.in
+Droplet user  : deploy@aurix.linustech.in (passwordless sudo, in docker group)
+App location  : /opt/aurix (owned by deploy:deploy)
+Env file      : /opt/aurix/.env (chmod 600)
+Compose files : docker-compose.prod.yml + deploy/docker-compose.deploy.yml
+Service       : aurix.service (systemctl reload aurix to deploy)
+Logs          : docker compose ... logs -f <service>
+Backups       : /home/deploy/backups/aurix-YYYY-MM-DD.sql.gz (nightly cron)
+```

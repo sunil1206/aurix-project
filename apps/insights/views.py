@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from django.contrib.auth import get_user_model
 from django.shortcuts import get_object_or_404
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -34,9 +35,14 @@ class MarketInsightsView(APIView):
     """
     GET /api/insights/market/
 
+    PUBLIC — anyone can read the market view (it's user-agnostic data).
+    This lets the landing page show live charts + AI insights as a demo
+    without requiring registration.
+
     Quant view of the gold market: indicators + signal + sentiment + LLM summary.
-    Query params: ?period=60d&interval=1d
+    Query params: ?period=3y&interval=1d
     """
+    permission_classes = [AllowAny]
 
     def get(self, request):
         period = request.query_params.get("period", "3y")

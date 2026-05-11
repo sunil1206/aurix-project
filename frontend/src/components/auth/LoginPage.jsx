@@ -4,13 +4,13 @@
  * Single screen with a toggle between login and register. On success
  * the AuthContext stores the JWT and the App swaps to <AppShell />.
  */
-import { AlertTriangle, Lock, Mail, TrendingUp } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Lock, Mail, TrendingUp } from 'lucide-react'
 import { useState } from 'react'
 
 import { useAuth } from '../../context/AuthContext.jsx'
 import { useNotification } from '../../context/NotificationContext.jsx'
 
-export default function LoginPage() {
+export default function LoginPage({ onBack }) {
   const { login, register } = useAuth()
   const { notify } = useNotification()
 
@@ -41,7 +41,15 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen bg-[#0A0E17] flex items-center justify-center p-4">
-      <div className="bg-[#111827] border border-slate-800 rounded-2xl p-8 w-full max-w-md shadow-2xl">
+      <div className="bg-[#111827] border border-slate-800 rounded-2xl p-8 w-full max-w-md shadow-2xl relative">
+        {onBack && (
+          <button
+            onClick={onBack}
+            className="absolute top-4 left-4 flex items-center gap-1 text-xs text-slate-400 hover:text-white"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" /> Back
+          </button>
+        )}
         <div className="flex flex-col items-center mb-8">
           <div className="bg-amber-500/10 p-4 rounded-full mb-4 ring-1 ring-amber-500/20">
             <TrendingUp className="w-10 h-10 text-amber-500" />

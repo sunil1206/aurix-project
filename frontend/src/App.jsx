@@ -1,16 +1,25 @@
 /**
- * <App /> -- top-level router.
+ * <App /> — top-level router.
  *
- * No real router needed: the app is two screens deep.
- *   - Not authenticated  -> <LoginPage />
- *   - Authenticated      -> <AppShell /> (which manages its own view state)
+ *   Authenticated         → <AppShell />
+ *   Not authenticated     → <LandingPage /> by default,
+ *                           with onSignIn / onSignUp toggling to <LoginPage />.
+ *
+ * The landing page is PUBLIC (no auth required) so reviewers can see
+ * the product immediately without registering. Signing in / signing up
+ * still flows through <LoginPage />.
  */
+import { useState } from 'react'
+
 import LoginPage from './components/auth/LoginPage.jsx'
+import LandingPage from './components/landing/LandingPage.jsx'
 import AppShell from './components/layout/AppShell.jsx'
 import { useAuth } from './context/AuthContext.jsx'
 
 export default function App() {
   const { isAuthenticated, isLoading } = useAuth()
+  // For unauthenticated users: 'landing' (default) or 'auth'
+  const [publicView, setPublicView] = useState('landing')
 
   if (isLoading) {
     return (
@@ -20,5 +29,16 @@ export default function App() {
     )
   }
 
-  return isAuthenticated ? <AppShell /> : <LoginPage />
+  if (isAuthenticated) return <AppShell />
+
+  if (publicView === 'auth') {
+    return <LoginPage onBack={() => setPublicView('landing')} />
+  }
+
+  return (
+    <LandingPage
+      onSignIn={() => setPublicView('auth')}
+      onSignUp={() => setPublicView('auth')}
+    />
+  )
 }
