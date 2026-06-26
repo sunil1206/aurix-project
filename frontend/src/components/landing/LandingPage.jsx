@@ -211,7 +211,7 @@ const FEATURES = [
 function Features() {
   return (
     <section className="py-16 sm:py-20 bg-[#0A0E17]">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6">
+      <div className="max-w-6xl mx6w-auto px-4 sm:px-6">
         <div className="text-center mb-12">
           <p className="text-xs uppercase tracking-wider text-amber-500 font-semibold">
             What's inside
